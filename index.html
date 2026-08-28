@@ -16,10 +16,11 @@
     button:disabled { background: #475569; cursor: not-allowed; }
     .btn-connect { background: #16a34a; }
     .btn-connect:hover { background: #15803d; }
-    #log { background: #020617; color: #38bdf8; padding: 12px; height: 220px; overflow-y: auto; font-family: 'Courier New', Courier, monospace; border-radius: 6px; border: 1px solid #1e293b; margin-top: 15px; font-size: 13px; }
+    #log { background: #020617; color: #38bdf8; padding: 12px; height: 260px; overflow-y: auto; font-family: 'Courier New', Courier, monospace; border-radius: 6px; border: 1px solid #1e293b; margin-top: 15px; font-size: 13px; }
     .code-out { color: #4ade80; }
     .err-out { color: #f87171; }
     .info-out { color: #fbbf24; }
+    .warn-out { color: #fb923c; }
   </style>
 <base target="_blank">
 </head>
@@ -46,60 +47,127 @@
   <button id="btnSend" onclick="processAICommand()" disabled>Enviar Orden a la IA</button>
 
   <label>Consola / Registro de Ejecución:</label>
-  <div id="log"> Esperando conexión por USB y API Key...<br></div>
+  <div id="log">Esperando conexión por USB y API Key...<br></div>
 </div>
 
 <script>
-let port;
-let writer;
-let reader;
+let port = null;
+let writer = null;
+let reader = null;
 let readLoopRunning = false;
+
+// Verificar soporte de Web Serial al cargar
+if (!navigator.serial) {
+  log("<span class='err-out'>❌ Tu navegador NO soporta Web Serial API. Usa Google Chrome o Microsoft Edge.</span>");
+  log("<span class='warn-out'>⚠️ Firefox y Safari NO funcionan. Asegúrate de abrir este archivo por HTTP/HTTPS o localhost.</span>");
+}
 
 // 1. Conexión Serial por WebSerial API
 async function connectSerial() {
+  // Verificar soporte
+  if (!navigator.serial) {
+    log("<span class='err-out'>❌ ERROR: Web Serial API no disponible. Usa Chrome/Edge.</span>");
+    alert("Tu navegador no soporta Web Serial API.\nUsa Google Chrome o Microsoft Edge.\nFirefox y Safari NO funcionan.");
+    return;
+  }
+
   try {
+    // Si ya hay un puerto abierto, cerrarlo primero
+    if (port && port.readable) {
+      await disconnectSerial();
+    }
+
+    log("🔍 Solicitando puerto USB...");
+
+    // Solicitar puerto al usuario
     port = await navigator.serial.requestPort();
+
+    log("🔓 Abriendo puerto a 115200 baudios...");
     await port.open({ baudRate: 115200 });
 
+    // Configurar escritura
     const textEncoder = new TextEncoderStream();
-    textEncoder.readable.pipeTo(port.writable);
+    const writableClosed = textEncoder.readable.pipeTo(port.writable);
     writer = textEncoder.writable.getWriter();
 
-    // Iniciar lectura de respuestas del ESP32
-    startReading();
+    // Configurar lectura (opcional, no bloquea si falla)
+    try {
+      const textDecoder = new TextDecoderStream();
+      const readableClosed = port.readable.pipeTo(textDecoder.writable);
+      reader = textDecoder.readable.getReader();
+      startReading();
+    } catch (readErr) {
+      log("<span class='warn-out'>⚠️ No se pudo iniciar lectura: " + readErr.message + "</span>");
+    }
 
+    // Habilitar controles
     document.getElementById('prompt').disabled = false;
     document.getElementById('btnSend').disabled = false;
     document.getElementById('btnConnect').innerText = "✓ ESP32 Conectado por USB";
-    log("🔌 Conectado con éxito al ESP32.");
+    document.getElementById('btnConnect').classList.remove('btn-connect');
+    document.getElementById('btnConnect').style.background = '#dc2626';
+    document.getElementById('btnConnect').onclick = disconnectSerial;
+
+    log("<span class='code-out'>🔌 Conectado con éxito al ESP32.</span>");
+
   } catch (err) {
-    log("<span class='err-out'>❌ Error de conexión USB: " + err + "</span>");
+    if (err.name === 'NotFoundError') {
+      log("<span class='warn-out'>⚠️ No seleccionaste ningún puerto USB.</span>");
+    } else if (err.name === 'SecurityError') {
+      log("<span class='err-out'>❌ Error de seguridad: la página debe estar en HTTPS o localhost.</span>");
+    } else {
+      log("<span class='err-out'>❌ Error de conexión USB: " + err.name + " - " + err.message + "</span>");
+    }
   }
 }
 
-// Leer respuestas del ESP32 en tiempo real
-async function startReading() {
-  if (readLoopRunning) return;
-  readLoopRunning = true;
+// Desconectar
+async function disconnectSerial() {
+  try {
+    if (reader) {
+      await reader.cancel();
+      reader = null;
+    }
+    if (writer) {
+      await writer.close();
+      writer = null;
+    }
+    if (port) {
+      await port.close();
+      port = null;
+    }
+  } catch (e) {
+    // Ignorar errores al cerrar
+  }
 
-  const textDecoder = new TextDecoderStream();
-  port.readable.pipeTo(textDecoder.writable);
-  reader = textDecoder.readable.getReader();
+  readLoopRunning = false;
+  document.getElementById('prompt').disabled = true;
+  document.getElementById('btnSend').disabled = true;
+  document.getElementById('btnConnect').innerText = "3. Conectar ESP32 por USB";
+  document.getElementById('btnConnect').classList.add('btn-connect');
+  document.getElementById('btnConnect').style.background = '';
+  document.getElementById('btnConnect').onclick = connectSerial;
+  log("🔌 Desconectado del ESP32.");
+}
+
+// Leer respuestas del ESP32
+async function startReading() {
+  if (readLoopRunning || !reader) return;
+  readLoopRunning = true;
 
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       if (value) {
-        // Filtrar el eco de lo que enviamos y mostrar solo respuestas/errors
-        const clean = value.replace(/\x04/g, '').replace(/\x03/g, '').trim();
-        if (clean && !clean.startsWith('>>>') && !clean.startsWith('...') && clean.length > 0) {
-          log("<span class='info-out'>📟 ESP32: " + clean.replace(/\n/g, '<br>') + "</span>");
+        const clean = value.replace(/\x04/g, '').replace(/\x03/g, '').replace(/\r/g, '').trim();
+        if (clean && clean.length > 0 && !clean.startsWith('>>>') && !clean.startsWith('...')) {
+          log("<span class='info-out'>📟 ESP32: " + clean.replace(/\n/g, ' | ') + "</span>");
         }
       }
     }
   } catch (e) {
-    // Puerto cerrado, normal
+    // Puerto cerrado
   } finally {
     readLoopRunning = false;
   }
@@ -107,24 +175,34 @@ async function startReading() {
 
 // 2. Enviar código al ESP32 - línea por línea con delay
 async function sendToESP32(code) {
-  if (!writer) return;
+  if (!writer) {
+    log("<span class='err-out'>❌ No hay conexión con el ESP32.</span>");
+    return;
+  }
 
   // Separar por líneas (ya sean ; o \n)
   const lines = code.split(/;|\n/).map(l => l.trim()).filter(l => l.length > 0);
 
-  if (lines.length === 0) return;
+  if (lines.length === 0) {
+    log("<span class='warn-out'>⚠️ No hay código para enviar.</span>");
+    return;
+  }
 
-  log("<span class='code-out'>📤 Enviando " + lines.length + " comando(s) al ESP32...</span>");
+  log("<span class='code-out'>📤 Enviando " + lines.length + " comando(s)...</span>");
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    await writer.write(line + "\r\n");
-    log("<span class='code-out'>>>> " + line + "</span>");
-    // Delay de 150ms entre líneas para no saturar el buffer del REPL
-    await new Promise(r => setTimeout(r, 150));
+    try {
+      await writer.write(line + "\r\n");
+      log("<span class='code-out'>>>> " + line.substring(0, 80) + (line.length > 80 ? "..." : "") + "</span>");
+      await new Promise(r => setTimeout(r, 200));
+    } catch (writeErr) {
+      log("<span class='err-out'>❌ Error enviando línea: " + writeErr.message + "</span>");
+      break;
+    }
   }
 
-  log("<span class='code-out'>✅ Código enviado completamente.</span>");
+  log("<span class='code-out'>✅ Envío completado.</span>");
 }
 
 // 3. Consulta a la API de Gemini
@@ -138,6 +216,10 @@ async function processAICommand() {
     return;
   }
   if (!userPrompt) return;
+  if (!writer) {
+    log("<span class='err-out'>❌ Primero conecta el ESP32 por USB.</span>");
+    return;
+  }
 
   log("🧠 Agente IA procesando orden con Gemini...");
   document.getElementById('btnSend').disabled = true;
@@ -182,8 +264,11 @@ async function processAICommand() {
       let code = data.candidates[0].content.parts[0].text.trim();
       code = code.replace(/```python/g, '').replace(/```/g, '').trim();
 
-      log("💡 Código generado:
-" + code.replace(/\n/g, '<br>'));
+      log("💡 Código generado:");
+      code.split("\n").forEach(l => {
+        if (l.trim()) log("<span class='code-out'>   " + l.trim() + "</span>");
+      });
+
       await sendToESP32(code);
     } else {
       log("<span class='err-out'>❌ Error en API: " + JSON.stringify(data) + "</span>");
