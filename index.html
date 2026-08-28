@@ -2,44 +2,56 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Controlador ESP32 con Agente IA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Controlador ESP32 con Agente IA Gemini</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f9; }
-    .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-width: 600px; }
-    select, input, button { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
-    button { background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-    button:disabled { background: #ccc; }
-    #log { background: #222; color: #0f0; padding: 10px; height: 150px; overflow-y: scroll; font-family: monospace; border-radius: 4px; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background: #0f172a; color: #f8fafc; }
+    .card { background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); max-width: 650px; margin: auto; }
+    h2 { color: #38bdf8; margin-top: 0; }
+    label { font-size: 14px; font-weight: bold; color: #94a3b8; display: block; margin-top: 15px; }
+    select, input, button { padding: 12px; margin-top: 5px; width: 100%; box-sizing: border-box; border-radius: 6px; border: 1px solid #334155; font-size: 14px; }
+    input, select { background: #0f172a; color: #fff; }
+    button { background: #0284c7; color: white; font-weight: bold; border: none; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #0369a1; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    .btn-connect { background: #16a34a; }
+    .btn-connect:hover { background: #15803d; }
+    #log { background: #020617; color: #38bdf8; padding: 12px; height: 180px; overflow-y: auto; font-family: 'Courier New', Courier, monospace; border-radius: 6px; border: 1px solid #1e293b; margin-top: 15px; font-size: 13px; }
+    .code-out { color: #4ade80; }
+    .err-out { color: #f87171; }
   </style>
 </head>
 <body>
 
 <div class="card">
-  <h2>Agente IA + MicroPython ESP32</h2>
+  <h2>🤖 Agente MicroPython ESP32 + Gemini</h2>
   
-  <label for="board">1. Selecciona tu placa:</label>
+  <label for="apiKey">1. Tu API Key de Gemini:</label>
+  <input type="password" id="apiKey" placeholder="AIzaSy..." />
+
+  <label for="board">2. Selecciona tu placa ESP32:</label>
   <select id="board">
-    <option value="esp32_std">ESP32 Dev Module (Estándar)</option>
-    <option value="esp32_c3">ESP32-C3</option>
-    <option value="esp32_s3">ESP32-S3</option>
-    <option value="esp32_c6">ESP32-C6</option>
+    <option value="ESP32 Dev Module Estándar (Pin LED típico: 2)">ESP32 Dev Module (Estándar)</option>
+    <option value="ESP32-C3 (Pin LED típico: 8, pines IO: 0-21)">ESP32-C3</option>
+    <option value="ESP32-S3 (Pin LED típico: 47/RGB en 48, dual USB)">ESP32-S3</option>
+    <option value="ESP32-C6 (Pin LED típico: 8/15)">ESP32-C6</option>
   </select>
 
-  <button id="btnConnect" onclick="connectSerial()">2. Conectar ESP32 por USB</button>
+  <button id="btnConnect" class="btn-connect" onclick="connectSerial()">3. Conectar ESP32 por USB</button>
   
-  <label for="prompt">3. Orden para el Agente IA:</label>
-  <input type="text" id="prompt" placeholder="Ej: Enciende el LED en el pin 2" disabled>
-  <button id="btnSend" onclick="processAICommand()" disabled>Enviar Orden</button>
+  <label for="prompt">4. Orden para el Agente IA:</label>
+  <input type="text" id="prompt" placeholder="Ej: Enciende el LED en el pin 8 o Haz parpadear el pin 2 tres veces" disabled />
+  <button id="btnSend" onclick="processAICommand()" disabled>Enviar Orden a la IA</button>
 
-  <h3>Consola REPL / Respuesta:</h3>
-  <div id="log"></div>
+  <label>Consola / Registro de Ejecución:</label>
+  <div id="log"> Esperando conexión por USB y API Key...<br></div>
 </div>
 
 <script>
 let port;
 let writer;
 
-// 1. Conectar al ESP32 mediante WebSerial
+// 1. Conexión Serial por WebSerial API
 async function connectSerial() {
   try {
     port = await navigator.serial.requestPort();
@@ -51,56 +63,88 @@ async function connectSerial() {
 
     document.getElementById('prompt').disabled = false;
     document.getElementById('btnSend').disabled = false;
-    document.getElementById('btnConnect').innerText = "✓ ESP32 Conectado";
-    log("Conectado con éxito al ESP32.");
+    document.getElementById('btnConnect').innerText = "✓ ESP32 Conectado por USB";
+    log("🔌 Conectado con éxito al ESP32.");
   } catch (err) {
-    log("Error al conectar: " + err);
+    log("<span class='err-out'>❌ Error de conexión USB: " + err + "</span>");
   }
 }
 
-// 2. Enviar comandos de código MicroPython al REPL del ESP32
+// 2. Enviar código directo a la consola REPL de MicroPython
 async function sendToESP32(code) {
   if (!writer) return;
-  // Enviar el código seguido de un Enter
+  // Enviamos la línea de código seguida de retorno de carro
   await writer.write(code + "\r\n");
-  log(">>> " + code);
+  log("<span class='code-out'>>>> " + code + "</span>");
 }
 
-// 3. Simulación/Lógica del Agente IA
+// 3. Consulta a la API de Gemini
 async function processAICommand() {
-  const userPrompt = document.getElementById('prompt').value;
-  const boardType = document.getElementById('board').value;
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const userPrompt = document.getElementById('prompt').value.trim();
+  const boardInfo = document.getElementById('board').value;
 
-  log("Procesando orden con IA...");
-
-  // Aquí conectarías con la API de OpenAI, Gemini o tu propio backend.
-  // La IA recibe el tipo de placa y la orden, y genera el código MicroPython:
-  const generatedCode = translatePromptToMicroPython(userPrompt, boardType);
-
-  if (generatedCode) {
-    await sendToESP32(generatedCode);
-  } else {
-    log("No se pudo interpretar la orden.");
+  if (!apiKey) {
+    alert("Por favor ingresa tu API Key de Gemini.");
+    return;
   }
-}
+  if (!userPrompt) return;
 
-// Traductor de ejemplo (aquí irá la llamada a la API de la IA)
-function translatePromptToMicroPython(prompt, board) {
-  prompt = prompt.toLowerCase();
-  
-  // Mapeo básico de prueba
-  if (prompt.includes("enciende") || prompt.includes("prende")) {
-    const pinMatch = prompt.match(/\d+/);
-    const pin = pinMatch ? pinMatch[0] : 2; // Pin por defecto
-    return `import machine; machine.Pin(${pin}, machine.Pin.OUT).value(1)`;
-  } 
-  else if (prompt.includes("apaga")) {
-    const pinMatch = prompt.match(/\d+/);
-    const pin = pinMatch ? pinMatch[0] : 2;
-    return `import machine; machine.Pin(${pin}, machine.Pin.OUT).value(0)`;
+  log("🧠 Agente IA procesando orden con Gemini...");
+  document.getElementById('btnSend').disabled = true;
+
+  // System Prompt estricto para forzar solo una línea de MicroPython limpio
+  const systemInstruction = `Eres un agente compilador de MicroPython para microcontroladores ESP32. 
+  Tu única función es traducir la instrucción en lenguaje natural del usuario en CÓDIGO MICROPYTHON ejecutable de UNA SOLA LÍNEA o comandos separados por punto y coma ';'. 
+  Reglas estrictas:
+  1. Responde ÚNICAMENTE con el código en MicroPython. 
+  2. NO use bloques de código markdown (\`\`\`python), NINGUNA explicación, NI texto adicional.
+  3. Asegúrate de importar los módulos necesarios (ej: import machine, time).
+  4. Placa objetivo: ${boardInfo}.`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+  const payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: systemInstruction },
+          { text: `Instrucción del usuario: ${userPrompt}` }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.1 // Baja temperatura para respuestas deterministas y exactas
+    }
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json();
+
+    if (data.candidates && data.candidates[0].content.parts[0].text) {
+      let code = data.candidates[0].content.parts[0].text.trim();
+      
+      // Limpiar posibles etiquetas o saltos no deseados
+      code = code.replace(/```python/g, '').replace(/```/g, '').replace(/\n/g, '; ');
+
+      log("💡 Código generado por la IA: " + code);
+      await sendToESP32(code);
+    } else {
+      log("<span class='err-out'>❌ Error: La API no devolvió una respuesta válida.</span>");
+      if(data.error) log("<span class='err-out'>" + data.error.message + "</span>");
+    }
+  } catch (error) {
+    log("<span class='err-out'>❌ Error en la llamada HTTP a Gemini: " + error + "</span>");
+  } finally {
+    document.getElementById('btnSend').disabled = false;
   }
-  
-  return null;
 }
 
 function log(text) {
