@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Controlador ESP32 con Agente IA</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f9; }
+    .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-width: 600px; }
+    select, input, button { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+    button { background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    button:disabled { background: #ccc; }
+    #log { background: #222; color: #0f0; padding: 10px; height: 150px; overflow-y: scroll; font-family: monospace; border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>Agente IA + MicroPython ESP32</h2>
+  
+  <label for="board">1. Selecciona tu placa:</label>
+  <select id="board">
+    <option value="esp32_std">ESP32 Dev Module (Estándar)</option>
+    <option value="esp32_c3">ESP32-C3</option>
+    <option value="esp32_s3">ESP32-S3</option>
+    <option value="esp32_c6">ESP32-C6</option>
+  </select>
+
+  <button id="btnConnect" onclick="connectSerial()">2. Conectar ESP32 por USB</button>
+  
+  <label for="prompt">3. Orden para el Agente IA:</label>
+  <input type="text" id="prompt" placeholder="Ej: Enciende el LED en el pin 2" disabled>
+  <button id="btnSend" onclick="processAICommand()" disabled>Enviar Orden</button>
+
+  <h3>Consola REPL / Respuesta:</h3>
+  <div id="log"></div>
+</div>
+
+<script>
+let port;
+let writer;
+
+// 1. Conectar al ESP32 mediante WebSerial
+async function connectSerial() {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    
+    const textEncoder = new TextEncoderStream();
+    textEncoder.readable.pipeTo(port.writable);
+    writer = textEncoder.writable.getWriter();
+
+    document.getElementById('prompt').disabled = false;
+    document.getElementById('btnSend').disabled = false;
+    document.getElementById('btnConnect').innerText = "✓ ESP32 Conectado";
+    log("Conectado con éxito al ESP32.");
+  } catch (err) {
+    log("Error al conectar: " + err);
+  }
+}
+
+// 2. Enviar comandos de código MicroPython al REPL del ESP32
+async function sendToESP32(code) {
+  if (!writer) return;
+  // Enviar el código seguido de un Enter
+  await writer.write(code + "\r\n");
+  log(">>> " + code);
+}
+
+// 3. Simulación/Lógica del Agente IA
+async function processAICommand() {
+  const userPrompt = document.getElementById('prompt').value;
+  const boardType = document.getElementById('board').value;
+
+  log("Procesando orden con IA...");
+
+  // Aquí conectarías con la API de OpenAI, Gemini o tu propio backend.
+  // La IA recibe el tipo de placa y la orden, y genera el código MicroPython:
+  const generatedCode = translatePromptToMicroPython(userPrompt, boardType);
+
+  if (generatedCode) {
+    await sendToESP32(generatedCode);
+  } else {
+    log("No se pudo interpretar la orden.");
+  }
+}
+
+// Traductor de ejemplo (aquí irá la llamada a la API de la IA)
+function translatePromptToMicroPython(prompt, board) {
+  prompt = prompt.toLowerCase();
+  
+  // Mapeo básico de prueba
+  if (prompt.includes("enciende") || prompt.includes("prende")) {
+    const pinMatch = prompt.match(/\d+/);
+    const pin = pinMatch ? pinMatch[0] : 2; // Pin por defecto
+    return `import machine; machine.Pin(${pin}, machine.Pin.OUT).value(1)`;
+  } 
+  else if (prompt.includes("apaga")) {
+    const pinMatch = prompt.match(/\d+/);
+    const pin = pinMatch ? pinMatch[0] : 2;
+    return `import machine; machine.Pin(${pin}, machine.Pin.OUT).value(0)`;
+  }
+  
+  return null;
+}
+
+function log(text) {
+  const logDiv = document.getElementById('log');
+  logDiv.innerHTML += text + "<br>";
+  logDiv.scrollTop = logDiv.scrollHeight;
+}
+</script>
+
+</body>
+</html>
