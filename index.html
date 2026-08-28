@@ -20,12 +20,13 @@
     .code-out { color: #4ade80; }
     .err-out { color: #f87171; }
   </style>
+<base target="_blank">
 </head>
 <body>
 
 <div class="card">
   <h2>🤖 Agente MicroPython ESP32 + Gemini</h2>
-  
+
   <label for="apiKey">1. Tu API Key de Gemini:</label>
   <input type="password" id="apiKey" placeholder="AIzaSy..." />
 
@@ -38,7 +39,7 @@
   </select>
 
   <button id="btnConnect" class="btn-connect" onclick="connectSerial()">3. Conectar ESP32 por USB</button>
-  
+
   <label for="prompt">4. Orden para el Agente IA:</label>
   <input type="text" id="prompt" placeholder="Ej: Enciende el LED en el pin 8 o Haz parpadear el pin 2 tres veces" disabled />
   <button id="btnSend" onclick="processAICommand()" disabled>Enviar Orden a la IA</button>
@@ -56,7 +57,7 @@ async function connectSerial() {
   try {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
-    
+
     const textEncoder = new TextEncoderStream();
     textEncoder.readable.pipeTo(port.writable);
     writer = textEncoder.writable.getWriter();
@@ -73,7 +74,6 @@ async function connectSerial() {
 // 2. Enviar código directo a la consola REPL de MicroPython
 async function sendToESP32(code) {
   if (!writer) return;
-  // Enviamos la línea de código seguida de retorno de carro
   await writer.write(code + "\r\n");
   log("<span class='code-out'>>>> " + code + "</span>");
 }
@@ -93,16 +93,15 @@ async function processAICommand() {
   log("🧠 Agente IA procesando orden con Gemini...");
   document.getElementById('btnSend').disabled = true;
 
-  // System Prompt estricto para forzar solo una línea de MicroPython limpio
   const systemInstruction = `Eres un agente compilador de MicroPython para microcontroladores ESP32. 
-  Tu única función es traducir la instrucción en lenguaje natural del usuario en CÓDIGO MICROPYTHON ejecutable de UNA SOLA LÍNEA o comandos separados por punto y coma ';'. 
-  Reglas estrictas:
-  1. Responde ÚNICAMENTE con el código en MicroPython. 
-  2. NO use bloques de código markdown (\`\`\`python), NINGUNA explicación, NI texto adicional.
-  3. Asegúrate de importar los módulos necesarios (ej: import machine, time).
-  4. Placa objetivo: ${boardInfo}.`;
+  Tu única función es traducir la instrucción del usuario en CÓDIGO MICROPYTHON ejecutable de UNA SOLA LÍNEA (separado por ';'). 
+  Reglas:
+  1. Responde ÚNICAMENTE con el código en MicroPython.
+  2. NO use bloques markdown (\`\`\`python), NINGUNA explicación.
+  3. Si piden LED RGB / Neopixel, usa el módulo 'neopixel'.
+  4. Importa los módulos necesarios (machine, time, neopixel).
+  Placa objetivo: ${boardInfo}.`;
 
- // LÍNEA NUEVA Y CORREGIDA:
   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
   const payload = {
@@ -111,12 +110,12 @@ async function processAICommand() {
         role: "user",
         parts: [
           { text: systemInstruction },
-          { text: `Instrucción del usuario: ${userPrompt}` }
+          { text: `Instrucción: ${userPrompt}` }
         ]
       }
     ],
     generationConfig: {
-      temperature: 0.1 // Baja temperatura para respuestas deterministas y exactas
+      temperature: 0.1
     }
   };
 
@@ -131,18 +130,15 @@ async function processAICommand() {
 
     if (data.candidates && data.candidates[0].content.parts[0].text) {
       let code = data.candidates[0].content.parts[0].text.trim();
-      
-      // Limpiar posibles etiquetas o saltos no deseados
       code = code.replace(/```python/g, '').replace(/```/g, '').replace(/\n/g, '; ');
 
-      log("💡 Código generado por la IA: " + code);
+      log("💡 Código generado: " + code);
       await sendToESP32(code);
     } else {
-      log("<span class='err-out'>❌ Error: La API no devolvió una respuesta válida.</span>");
-      if(data.error) log("<span class='err-out'>" + data.error.message + "</span>");
+      log("<span class='err-out'>❌ Error en API: " + JSON.stringify(data) + "</span>");
     }
   } catch (error) {
-    log("<span class='err-out'>❌ Error en la llamada HTTP a Gemini: " + error + "</span>");
+    log("<span class='err-out'>❌ Error de red/petición: " + error + "</span>");
   } finally {
     document.getElementById('btnSend').disabled = false;
   }
