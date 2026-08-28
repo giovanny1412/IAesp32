@@ -102,7 +102,8 @@ async function processAICommand() {
   3. Asegúrate de importar los módulos necesarios (ej: import machine, time).
   4. Placa objetivo: ${boardInfo}.`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+ // LÍNEA NUEVA Y CORREGIDA:
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
   const payload = {
     contents: [
