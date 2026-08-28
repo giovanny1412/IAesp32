@@ -16,9 +16,10 @@
     button:disabled { background: #475569; cursor: not-allowed; }
     .btn-connect { background: #16a34a; }
     .btn-connect:hover { background: #15803d; }
-    #log { background: #020617; color: #38bdf8; padding: 12px; height: 180px; overflow-y: auto; font-family: 'Courier New', Courier, monospace; border-radius: 6px; border: 1px solid #1e293b; margin-top: 15px; font-size: 13px; }
+    #log { background: #020617; color: #38bdf8; padding: 12px; height: 220px; overflow-y: auto; font-family: 'Courier New', Courier, monospace; border-radius: 6px; border: 1px solid #1e293b; margin-top: 15px; font-size: 13px; }
     .code-out { color: #4ade80; }
     .err-out { color: #f87171; }
+    .info-out { color: #fbbf24; }
   </style>
 <base target="_blank">
 </head>
@@ -51,6 +52,8 @@
 <script>
 let port;
 let writer;
+let reader;
+let readLoopRunning = false;
 
 // 1. Conexión Serial por WebSerial API
 async function connectSerial() {
@@ -62,6 +65,9 @@ async function connectSerial() {
     textEncoder.readable.pipeTo(port.writable);
     writer = textEncoder.writable.getWriter();
 
+    // Iniciar lectura de respuestas del ESP32
+    startReading();
+
     document.getElementById('prompt').disabled = false;
     document.getElementById('btnSend').disabled = false;
     document.getElementById('btnConnect').innerText = "✓ ESP32 Conectado por USB";
@@ -71,11 +77,54 @@ async function connectSerial() {
   }
 }
 
-// 2. Enviar código directo a la consola REPL de MicroPython
+// Leer respuestas del ESP32 en tiempo real
+async function startReading() {
+  if (readLoopRunning) return;
+  readLoopRunning = true;
+
+  const textDecoder = new TextDecoderStream();
+  port.readable.pipeTo(textDecoder.writable);
+  reader = textDecoder.readable.getReader();
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        // Filtrar el eco de lo que enviamos y mostrar solo respuestas/errors
+        const clean = value.replace(/\x04/g, '').replace(/\x03/g, '').trim();
+        if (clean && !clean.startsWith('>>>') && !clean.startsWith('...') && clean.length > 0) {
+          log("<span class='info-out'>📟 ESP32: " + clean.replace(/\n/g, '<br>') + "</span>");
+        }
+      }
+    }
+  } catch (e) {
+    // Puerto cerrado, normal
+  } finally {
+    readLoopRunning = false;
+  }
+}
+
+// 2. Enviar código al ESP32 - línea por línea con delay
 async function sendToESP32(code) {
   if (!writer) return;
-  await writer.write(code + "\r\n");
-  log("<span class='code-out'>>>> " + code + "</span>");
+
+  // Separar por líneas (ya sean ; o \n)
+  const lines = code.split(/;|\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+  if (lines.length === 0) return;
+
+  log("<span class='code-out'>📤 Enviando " + lines.length + " comando(s) al ESP32...</span>");
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    await writer.write(line + "\r\n");
+    log("<span class='code-out'>>>> " + line + "</span>");
+    // Delay de 150ms entre líneas para no saturar el buffer del REPL
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  log("<span class='code-out'>✅ Código enviado completamente.</span>");
 }
 
 // 3. Consulta a la API de Gemini
@@ -93,18 +142,18 @@ async function processAICommand() {
   log("🧠 Agente IA procesando orden con Gemini...");
   document.getElementById('btnSend').disabled = true;
 
-  const systemInstruction = `Eres un agente compilador de MicroPython para ESP32. 
-  Tu función es traducir la instrucción del usuario en CÓDIGO MICROPYTHON ejecutable de UNA SOLA LÍNEA (separado por ';'). 
-
-  REGLAS CRÍTICAS DE MICROPYTHON:
-  1. NO GENERES BUCLE INFINITO 'while True:' ni estructures bucles complejos en una sola línea (causan syntax error en REPL).
-  2. Si piden luces o secuencias, usa comandos secuenciales paso a paso con time.sleep().
-  3. Para Neopixel usa: np = neopixel.NeoPixel(machine.Pin(PIN_NUMERO), CANTIDAD_LEDS); np[0] = (R, G, B); np.write()
-  4. Responde ÚNICAMENTE con el código plano, sin bloques markdown (\`\`\`python).
-
+  const systemInstruction = `Eres un agente compilador de MicroPython para microcontroladores ESP32. 
+  Tu única función es traducir la instrucción del usuario en CÓDIGO MICROPYTHON ejecutable.
+  Reglas:
+  1. Responde ÚNICAMENTE con el código en MicroPython, una instrucción por línea.
+  2. NO use bloques markdown (\`\`\`python), NINGUNA explicación.
+  3. Si piden LED RGB / Neopixel, usa el módulo 'neopixel'.
+  4. Importa los módulos necesarios (machine, time, neopixel).
+  5. Usa time.sleep() para delays, NO uses bucles while infinitos.
   Placa objetivo: ${boardInfo}.`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+
   const payload = {
     contents: [
       {
@@ -131,9 +180,10 @@ async function processAICommand() {
 
     if (data.candidates && data.candidates[0].content.parts[0].text) {
       let code = data.candidates[0].content.parts[0].text.trim();
-      code = code.replace(/```python/g, '').replace(/```/g, '').replace(/\n/g, '; ');
+      code = code.replace(/```python/g, '').replace(/```/g, '').trim();
 
-      log("💡 Código generado: " + code);
+      log("💡 Código generado:
+" + code.replace(/\n/g, '<br>'));
       await sendToESP32(code);
     } else {
       log("<span class='err-out'>❌ Error en API: " + JSON.stringify(data) + "</span>");
